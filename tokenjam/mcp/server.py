@@ -1371,10 +1371,24 @@ def get_optimize_report(
                 conn = _ro_conn
             db = _Shim()
         else:
-            db = None
-        return _tool_get_optimize_report(
-            db, _config, agent_id, since, findings, budget_provider, budget_usd,
-        )
+            try:
+                from tokenjam.core.db import open_db
+                db = open_db(_config.storage)
+            except Exception as e:
+                # Catch DuckDB lock errors so we can return the intended guidance
+                if "lock" in str(e).lower() or "io error" in str(e).lower():
+                    db = None
+                else:
+                    raise
+
+        try:
+            return _tool_get_optimize_report(
+                db, _config, agent_id, since, findings, budget_provider, budget_usd,
+            )
+        finally:
+            # Clean up the writeable DB connection if we created one
+            if db is not None and getattr(db, "close", None) is not None and db.__class__.__name__ != "_Shim":
+                db.close()
     except Exception as e:
         return {"error": str(e)}
 

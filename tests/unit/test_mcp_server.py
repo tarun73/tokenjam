@@ -805,10 +805,15 @@ def test_get_optimize_report_serve_holds_lock_routes_over_http(tmp_path):
         _set_serve_url(None)
 
 
-def test_get_optimize_report_no_connection_returns_graceful_message():
+def test_get_optimize_report_no_connection_returns_graceful_message(monkeypatch):
     """With neither a read-only connection nor a serve URL, get_optimize_report
-    must return the graceful "requires a direct database connection" guidance
-    rather than opening a competing read-write connection (#61)."""
+    attempts open_db but if it encounters a lock error, it returns the graceful 
+    guidance rather than a raw exception."""
+    def mock_open_db(storage):
+        raise Exception("IO Error: Could not set lock on file")
+    
+    monkeypatch.setattr("tokenjam.core.db.open_db", mock_open_db, raising=False)
+    
     config = _make_config("alpha")
     _srv._config = config
     _srv._ro_conn = None
@@ -818,6 +823,32 @@ def test_get_optimize_report_no_connection_returns_graceful_message():
         assert "error" in result
         assert "direct database connection" in result["error"].lower()
         assert "could not set lock" not in result["error"].lower()
+    finally:
+        _srv._config = None
+
+def test_get_optimize_report_no_connection_succeeds_if_unlocked(monkeypatch):
+    """With neither a read-only connection nor a serve URL, get_optimize_report
+    should succeed in opening the DB if it is not locked by another process."""
+    class MockDB:
+        conn = True
+        def close(self): pass
+        
+    def mock_open_db(storage):
+        return MockDB()
+        
+    def mock_tool_get_optimize_report(db, config, agent_id, since, findings, budget_provider, budget_usd):
+        return {"report": "success"}
+
+    monkeypatch.setattr("tokenjam.core.db.open_db", mock_open_db, raising=False)
+    monkeypatch.setattr("tokenjam.mcp.server._tool_get_optimize_report", mock_tool_get_optimize_report, raising=False)
+    
+    config = _make_config("alpha")
+    _srv._config = config
+    _srv._ro_conn = None
+    _set_serve_url(None)
+    try:
+        result = _srv.get_optimize_report()
+        assert result == {"report": "success"}
     finally:
         _srv._config = None
 
